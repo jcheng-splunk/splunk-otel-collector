@@ -1,0 +1,40 @@
+name: Vilicus Scan
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@v3
+        with:
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v2.1.4
+        with:
+          go-version: 1.17.2
+      - id: module-cache
+        uses: actions/cache@v2
+        env:
+          cache-name: cache-go-modules
+        with:
+          path: |
+            /home/runner/go/pkg/mod
+            /home/runner/.cache/go-build
+          key: v1-go-pkg-mod-${{ runner.os }}-${{ hashFiles('**/go.mod', '**/go.sum') }}
+      - run: |
+          make docker-otelcol
+          docker tag otelcol:latest localhost:5000/otelcol:latest
+        env:
+          DOCKER_BUILDKIT: '1'
+      - name: Vilicus Scan
+        uses: edersonbrilhante/vilicus-github-action@v0.0.1
+        with:
+          image: localhost:5000/otelcol:latest
+#      - name: Upload results to github security
+#        uses: github/codeql-action/upload-sarif@v1
+#        with:
+#          sarif_file: artifacts/results.sarif
