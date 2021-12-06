@@ -1,0 +1,133 @@
+name: Security Scans
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  CVE_BIN_TOOL_VERSION: v3.0
+  OTELCOL_IMAGE: otelcol:latest
+
+jobs:
+  docker-otelcol:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v2.1.4
+        with:
+          go-version: 1.17.2
+      - id: module-cache
+        uses: actions/cache@v2
+        env:
+          cache-name: cache-go-modules
+        with:
+          path: |
+            /home/runner/go/pkg/mod
+            /home/runner/.cache/go-build
+          key: v1-go-pkg-mod-${{ runner.os }}-${{ hashFiles('**/go.mod', '**/go.sum') }}
+      - name: Build otelcol image
+        run: make docker-otelcol
+        env:
+          DOCKER_BUILDKIT: '1'
+      - name: Save ${{ env.OTELCOL_IMAGE }}
+        run: |
+          mkdir -p dist
+          docker save -o dist/otelcol.tar ${{ env.OTELCOL_IMAGE }}
+      - name: Save ${{ env.OTELCOL_IMAGE }}
+        uses: actions/upload-artifact@v2
+        with:
+          name: docker-otelcol
+          path: dist/otelcol.tar
+
+  trivy-fs-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - name: Run trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.2.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          skip-dirs: 'examples,internal/buildscripts,tests'
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+
+  trivy-image-scan:
+    runs-on: ubuntu-latest
+    needs: [docker-otelcol]
+    steps:
+      - name: Download ${{ env.OTELCOL_IMAGE }}
+        uses: actions/download-artifact@v2
+        with:
+          name: docker-otelcol
+          path: ./dist
+      - name: Load ${{ env.OTELCOL_IMAGE }}
+        run: docker load -i dist/otelcol.tar
+      - name: Run trivy image scan
+        uses: aquasecurity/trivy-action@0.2.0
+        with:
+          scan-type: 'image'
+          image-ref: ${{ env.OTELCOL_IMAGE }}
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+
+  cve-image-scan:
+    runs-on: ubuntu-latest
+    needs: [docker-otelcol]
+    steps:
+      - name: Download ${{ env.OTELCOL_IMAGE }}
+        uses: actions/download-artifact@v2
+        with:
+          name: docker-otelcol
+          path: ./dist
+      - name: Extract ${{ env.OTELCOL_IMAGE }}
+        run: |
+          mkdir otelcol
+          docker load -i dist/otelcol.tar
+          docker run -d -e SPLUNK_ACCESS_TOKEN=testing123 -e SPLUNK_REALM=test --name otelcol $OTELCOL_IMAGE
+          docker export otelcol | tar -C otelcol -xf -
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.9
+      - name: Get cached pip packages
+        uses: actions/cache@v2
+        with:
+          path: ~/.cache/pip
+          key: v1-pip-${{ runner.os }}-${{ env.CVE_BIN_TOOL_VERSION }}
+      - name: Get Date
+        id: get-date
+        run: |
+          echo "::set-output name=date::$(/bin/date -u "+%Y%m%d")"
+        shell: bash
+      - name: Get cached cve-bin-tool database
+        uses: actions/cache@v2
+        with:
+          path: ~/.cache/cve-bin-tool
+          key: v1-cve-bin-tool-${{ runner.os }}-${{ steps.get-date.outputs.date }}
+      - name: Install cve-bin-tool
+        run: pip install -U git+https://github.com/intel/cve-bin-tool@${CVE_BIN_TOOL_VERSION}
+      - name: Run CVE Scan
+        run: |
+          set +e
+          cve-bin-tool \
+            -u daily \
+            --severity high \
+            -o report.csv -f csv \
+            --exclude otelcol/usr/lib/splunk-otel-collector/agent-bundle/lib/python3.8/test \
+            otelcol
+          echo "CVE_SCAN_RC=$?" >> $GITHUB_ENV
+      - name: Upload report as an artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: cve-report
+          path: report.csv
+      - run: exit $CVE_SCAN_RC
