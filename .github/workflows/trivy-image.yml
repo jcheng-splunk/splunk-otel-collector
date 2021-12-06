@@ -1,13 +1,7 @@
-name: "Integration Test"
-
-on:
-  push:
-    branches:
-      - main
-
+name: Trivy Image Scan
+on: [push]
 jobs:
-  docker-otelcol:
-    name: docker-otelcol
+  trivy-image-scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -25,10 +19,15 @@ jobs:
             /home/runner/go/pkg/mod
             /home/runner/.cache/go-build
           key: v1-go-pkg-mod-${{ runner.os }}-${{ hashFiles('**/go.mod', '**/go.sum') }}
-      - run: make docker-otelcol
+      - name: Build otelcol image
+        run: make docker-otelcol
         env:
           DOCKER_BUILDKIT: '1'
-      - run: make integration-test
-        env:
-          SPLUNK_OTEL_COLLECTOR_IMAGE: 'otelcol:latest'
-
+      - name: Run trivy image scan
+        uses: aquasecurity/trivy-action@v0.1.0
+        with:
+          scan-type: 'image'
+          image-ref: 'otelcol:latest'
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
