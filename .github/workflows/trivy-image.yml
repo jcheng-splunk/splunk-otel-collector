@@ -24,7 +24,7 @@ jobs:
         env:
           DOCKER_BUILDKIT: '1'
       - name: Run trivy image scan
-        uses: aquasecurity/trivy-action@v0.1.0
+        uses: aquasecurity/trivy-action@0.2.0
         with:
           scan-type: 'image'
           image-ref: 'otelcol:latest'
